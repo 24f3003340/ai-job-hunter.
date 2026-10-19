@@ -5,12 +5,15 @@ a `Draft`. They hold no authority: everything they return is re-validated by the
 traceability check before it can appear in a resume.
 """
 import json
+import logging
 import re
+import time
 from typing import Protocol
 
 import httpx
+from fastapi import HTTPException
 
-from ..config import settings
+from ..config import secret, settings
 from .resume_schema import ClaimDraft, Draft, SectionDraft
 
 SYSTEM_PROMPT = """You tailor a candidate's resume to a job posting.
@@ -27,7 +30,12 @@ Rules (non-negotiable):
 
 
 class ProviderError(Exception):
-    pass
+    """Safe-to-show failure. `kind` drives the HTTP mapping; the message never carries provider response
+    bodies, prompts, profile text or credentials."""
+
+    def __init__(self, message: str, kind: str = "unavailable", retry_after: int | None = None):
+        super().__init__(message)
+        self.kind, self.retry_after = kind, retry_after
 
 
 class DraftProvider(Protocol):
@@ -87,14 +95,54 @@ class RuleBasedProvider:
         return Draft(summary=None, skill_order=order, experience=section("experience"), projects=projects)
 
 
+_RETRYABLE = {429, 500, 502, 503, 504, 529}
+log = logging.getLogger(__name__)
+
+
 class AnthropicProvider:
-    """Calls the Anthropic Messages API. Sends a minimised profile (no name/contact details)."""
+    """Calls the Anthropic Messages API with bounded retries. Receives a minimised, scrubbed profile."""
 
     name, external = "anthropic", True
+    URL = "https://api.anthropic.com/v1/messages"
 
-    def __init__(self, client: httpx.Client | None = None):
+    def __init__(self, client: httpx.Client | None = None, sleep=time.sleep, attempts: int = 2):
         self.model = settings.anthropic_model
-        self._client = client
+        self._client, self._sleep, self._attempts = client, sleep, attempts
+
+    def _request(self, payload: dict) -> dict:
+        headers = {"x-api-key": secret(settings.anthropic_api_key), "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+        client = self._client or httpx.Client(timeout=settings.ai_timeout_seconds)
+        last: ProviderError | None = None
+        for attempt in range(1, self._attempts + 1):
+            wait = 1.0 * attempt
+            try:
+                resp = client.post(self.URL, json=payload, headers=headers)
+            except httpx.TimeoutException:
+                last = ProviderError("AI provider timed out", "timeout")
+            except httpx.HTTPError as exc:  # connection errors etc.; message holds only the class name
+                last = ProviderError(f"AI provider unreachable ({type(exc).__name__})", "unavailable")
+            else:
+                if resp.status_code == 200:
+                    try:
+                        return resp.json()
+                    except ValueError:
+                        raise ProviderError("AI provider returned a non-JSON response", "bad_output")
+                if resp.status_code in (401, 403):
+                    log.error("AI provider rejected the configured credentials (HTTP %s)", resp.status_code)
+                    raise ProviderError("AI provider is not available (credentials rejected)", "auth")
+                ra = resp.headers.get("retry-after", "")
+                retry_after = int(ra) if ra.isdigit() else None
+                if resp.status_code not in _RETRYABLE:
+                    raise ProviderError(f"AI provider rejected the request (HTTP {resp.status_code})", "rejected")
+                kind = "rate_limited" if resp.status_code == 429 else "unavailable"
+                last = ProviderError(f"AI provider {'rate limit reached' if kind == 'rate_limited' else 'error'} "
+                                     f"(HTTP {resp.status_code})", kind, retry_after)
+                wait = min(retry_after, 5) if retry_after else wait
+            if attempt < self._attempts:
+                self._sleep(wait)
+        assert last is not None
+        raise last
 
     def draft(self, profile: dict, job: dict) -> Draft:
         payload = {
@@ -103,29 +151,29 @@ class AnthropicProvider:
                           "<PROFILE>\n" + json.dumps(profile, ensure_ascii=False) + "\n</PROFILE>\n<JOB>\n"
                           + json.dumps(job, ensure_ascii=False) + "\n</JOB>"}],
         }
-        headers = {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01",
-                   "content-type": "application/json"}
-        try:
-            client = self._client or httpx.Client(timeout=settings.ai_timeout_seconds)
-            resp = client.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers)
-            resp.raise_for_status()
-            text = "".join(b.get("text", "") for b in resp.json().get("content", []) if b.get("type") == "text")
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ProviderError(f"AI provider request failed ({type(exc).__name__})") from exc
+        body = self._request(payload)
+        if body.get("stop_reason") == "max_tokens":
+            raise ProviderError("AI provider output was truncated", "bad_output")
+        blocks = body.get("content") if isinstance(body, dict) else None
+        if not isinstance(blocks, list):
+            raise ProviderError("AI provider returned an unexpected response shape", "bad_output")
+        text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
         return parse_json_draft(text)
 
 
 def parse_json_draft(text: str) -> Draft:
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
-        raise ProviderError("AI provider returned no JSON")
+        raise ProviderError("AI provider returned no JSON", "bad_output")
     try:
         return Draft.model_validate(json.loads(m.group(0)))
     except (ValueError, TypeError) as exc:  # pydantic ValidationError is a ValueError
-        raise ProviderError("AI provider output did not match the required schema") from exc
+        raise ProviderError("AI provider output did not match the required schema", "bad_output") from exc
 
 
 def get_provider() -> DraftProvider:
     if settings.ai_provider == "anthropic":
+        if not secret(settings.anthropic_api_key):  # never call out with an empty/placeholder key
+            raise HTTPException(503, "AI provider is not configured")
         return AnthropicProvider()
     return RuleBasedProvider()

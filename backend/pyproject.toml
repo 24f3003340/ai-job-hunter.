@@ -5,12 +5,20 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115", "uvicorn>=0.30", "sqlalchemy>=2.0", "pydantic-settings>=2.4",
   "argon2-cffi>=23", "email-validator>=2", "python-multipart>=0.0.9", "psycopg[binary]>=3.2",
-  "alembic>=1.13", "pypdf>=5", "python-docx>=1.1", "reportlab>=4", "httpx>=0.27",
+  "alembic>=1.13", "redis>=5", "pypdf>=5", "python-docx>=1.1", "reportlab>=4", "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+integration = ["pytest>=8", "redis>=5", "aiosmtpd>=1.4", "cryptography>=42"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
+# Default run: deterministic unit tests only. Opt in with `-m integration` (local PostgreSQL/Redis/SMTP
+# services, see README) or `-m external` (real third-party APIs; needs explicit keys).
+addopts = "-m 'not integration and not external'"
+markers = [
+  "integration: needs locally started services (PostgreSQL, Redis, SMTP test server); no external network",
+  "external: calls a real third-party service (Anthropic, ClamAV); explicit opt-in, may cost money",
+]

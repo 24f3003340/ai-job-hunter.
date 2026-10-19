@@ -46,3 +46,57 @@ bullets into headings.
   victim out; reset-by-email clears it).
 * Salary currency is assumed INR; email-verification gating is off by default in development.
 * Job-level duplicate detection and matching from Phase 1 are unchanged.
+
+
+---
+
+# Phase F report - real-environment validation
+
+Baseline before changes: 136 passed (SQLite). After: **181 unit tests** (136 original, unchanged, + 45 new) pass on SQLite
+**and** on PostgreSQL 16, **25 integration tests** pass, 5 opt-in external tests are written and skipped.
+
+## Environment actually used
+PostgreSQL 16.15 and Redis 7.0.15 as native local processes (`scripts/dev_services.sh`), aiosmtpd 1.4.6 as the SMTP server.
+**No Docker daemon, no ClamAV, no Anthropic key, no internet SMTP** were available.
+
+## Verified (observed passing here)
+| Claim | How |
+|---|---|
+| Alembic builds the full schema on an empty PostgreSQL DB with zero model drift, native UUID/timestamptz types | `integration/test_postgres.py` |
+| 0001 -> 0002 upgrade on PostgreSQL preserves seeded data, backfills `version_number`, enforces the new unique constraint, downgrades and re-upgrades | same |
+| The entire original + new unit suite passes on PostgreSQL (register/login, reset, verification, upload/confirm, generation/versioning, export, approval invalidation, deletion) | `JOBHUNTER_TEST_DATABASE_URL=... pytest` |
+| Full journey + account deletion leaves no orphan rows in 13 tables and removes stored files | `test_full_user_journey_and_account_deletion_cascades` |
+| Concurrency on PostgreSQL: 8 simultaneous duplicate registrations -> exactly one 201, others 409; 8 simultaneous uses of a reset token -> exactly one succeeds | same file |
+| SMTP over STARTTLS and implicit TLS with AUTH delivers verification/reset mail; the links work once; wrong password / untrusted cert / wrong hostname / no-STARTTLS server abort **before credentials are sent** and deliver nothing; throttle caps real mail volume; expired and superseded tokens rejected; SMTP outage does not break signup and leaks no token | `integration/test_smtp.py` (+ mocked `test_mailer.py`) |
+| No log line contains tokens, bodies, addresses, API key or SMTP password | caplog assertions with canary values |
+| Anthropic provider (HTTP mocked): retries 429/5xx with capped backoff; maps timeouts/429/5xx/401/400/non-JSON/truncated/bad-schema to 504/503/502 with no version created and no response body or key echoed; key only in header; outbound body has no name/e-mail/phone (also redacted inside free text); never constructed without a key; consent revocation blocks it | `test_ai_provider_hardening.py` |
+| Redis limiter is atomic (40 threads -> exactly 10 allowed), shared across 4 OS processes (40 attempts -> exactly 15) and across **3 real uvicorn workers (30 requests -> exactly 10 allowed, 20 x 429)**; the in-process limiter let >10 through in the same harness | `integration/test_redis_ratelimit.py` |
+| Rate-limit failure policy: with Redis unreachable critical endpoints return 503 (never silently allowed), "local" mode and non-critical scopes still enforce per process, breaker limits retries | `test_ratelimit_backends.py` |
+| Production fails closed for unscanned uploads / scanner outage; explicit override is honoured and reported as `not_configured` | `test_ratelimit_backends.py` |
+
+## Defects found and fixed during validation
+1. **PostgreSQL-only 500**: a NUL (U+0000) in any text field crashed with `DataError` (SQLite accepts it). Now a 422.
+2. **STARTTLS did not verify certificates** (`smtplib.starttls()` with no context). Now verifies chain + hostname.
+3. **Dev "console" mailer logged raw token links**; and send errors could abort signup. Console logs metadata only, a `file`
+   backend was added, and mail is sent in a background task after commit (also removes a timing signal for account existence).
+4. A real SMTP server answered a rejected password with "AUTH not supported"; the mailer now treats that as permanent (no retry).
+5. Anthropic errors had no retry/limit handling and the key was a plain `str`; now `SecretStr` with the policy above.
+6. Rate limiter was per process only; added Redis backend + fail policy + `/health/ready`.
+
+## Behaviour changes (documented, intended)
+* `JOBHUNTER_ENV=production` additionally requires a Redis limiter (or an explicit single-worker override) and TLS SMTP.
+  Two config tests were updated to include the new required settings; no assertion was weakened and rejection cases were added.
+* Default dev mail backend is `file` instead of `console`.
+
+## NOT verified (do not treat as working)
+* **Real ClamAV**: protocol code is tested only against a fake clamd. `tests/external/test_clamav_real.py` (EICAR) exists but has never run.
+* **Live Anthropic API**: never called. Request/response shapes follow the public Messages API from knowledge, not from a live call.
+  `tests/external/test_anthropic_live.py` exists, opt-in, billable.
+* **Docker Compose file** and **GitHub Actions workflow**: written, YAML-parsed, never executed.
+* **A real mail provider / Mailpit**: only a local aiosmtpd was used; deliverability (SPF/DKIM/DMARC, spam filtering) unknown.
+* Redis with auth/TLS (`rediss://`), Sentinel/Cluster, eviction; PostgreSQL other than 16.15 local, managed PG, connection limits.
+* Load/performance, backups, monitoring, dependency vulnerability scan, legal/privacy review.
+
+## Production readiness
+**Not established.** The checks above passed in a local stand-in environment; the unverified list is the work remaining
+before a real deployment. See `docs/SECURITY.md`.

@@ -158,7 +158,8 @@ def test_rate_limit_can_be_disabled_in_dev(client, monkeypatch):
 
 GOOD = dict(env="production", database_url="postgresql+psycopg://u:p@db/app", public_base_url="https://app.example.com",
             cors_origins=["https://app.example.com"], email_backend="smtp", smtp_host="smtp.example.com",
-            require_verified_email=True, clamav_host="clamav")
+            require_verified_email=True, clamav_host="clamav",
+            rate_limit_backend="redis", redis_url="rediss://:pw@redis.example.com:6379/0")
 
 
 def test_production_config_accepts_safe_values():
@@ -175,6 +176,10 @@ def test_production_config_accepts_safe_values():
     ({"clamav_host": ""}, "CLAMAV"),
     ({"ai_provider": "anthropic"}, "ANTHROPIC_API_KEY"),
     ({"env": "staging"}, "ENV"),
+    ({"rate_limit_backend": "memory"}, "RATE_LIMIT_BACKEND"),
+    ({"redis_url": ""}, "REDIS_URL"),
+    ({"smtp_security": "none"}, "SMTP_SECURITY"),
+    ({"rate_limit_critical_fail_mode": "open"}, "FAIL_MODE"),
 ])
 def test_production_config_rejects_unsafe_values(override, needle):
     with pytest.raises(ValueError, match=needle):
@@ -183,3 +188,7 @@ def test_production_config_rejects_unsafe_values(override, needle):
 
 def test_unscanned_uploads_must_be_explicitly_allowed():
     Settings(_env_file=None, **{**GOOD, "clamav_host": "", "allow_unscanned_uploads": True})
+
+
+def test_single_worker_process_local_limiter_must_be_explicit():
+    Settings(_env_file=None, **{**GOOD, "rate_limit_backend": "memory", "allow_process_local_rate_limit": True})

@@ -1,9 +1,14 @@
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEV_ENVS = {"development", "test"}
+
+
+def secret(value) -> str:
+    """Accept SecretStr or plain str (tests assign plain strings) and return the raw value."""
+    return value.get_secret_value() if isinstance(value, SecretStr) else (value or "")
 
 
 class Settings(BaseSettings):
@@ -32,14 +37,25 @@ class Settings(BaseSettings):
     rate_limit_upload: str = "10/hour"  # per authenticated user
     rate_limit_generate: str = "20/hour"  # resume generation, per user
     trust_proxy_headers: bool = False  # honour X-Forwarded-For only behind a trusted proxy
+    rate_limit_backend: str = "memory"  # memory (single process) | redis (shared across workers/instances)
+    redis_url: SecretStr = SecretStr("")  # e.g. rediss://:PASSWORD@host:6379/0 (may embed a password)
+    redis_timeout_seconds: float = 0.25
+    # If Redis is down: "closed" refuses auth/upload/generation requests (503); "local" enforces the limit
+    # per process instead. Non-critical global limits always fall back to per-process enforcement.
+    rate_limit_critical_fail_mode: str = "closed"
+    allow_process_local_rate_limit: bool = False  # production escape hatch for a single-worker deployment
 
     # e-mail
-    email_backend: str = "console"  # console | smtp | outbox (tests)
+    email_backend: str = "file"  # file (dev: .eml files) | console (logs metadata only) | smtp | outbox (tests)
+    mail_dir: Path = Path("./var/mail")
     email_from: str = "no-reply@example.invalid"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
-    smtp_password: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_security: str = "starttls"  # starttls | ssl | none (none: dev only, never with credentials)
+    smtp_ca_file: str = ""  # optional PEM bundle to trust instead of the system store
+    smtp_timeout_seconds: float = 15.0
 
     # uploads
     storage_dir: Path = Path("./var/storage")
@@ -49,12 +65,13 @@ class Settings(BaseSettings):
     max_docx_uncompressed_bytes: int = 30 * 1024 * 1024
     clamav_host: str = ""  # empty => malware scanning NOT configured
     clamav_port: int = 3310
+    clamav_timeout_seconds: float = 10.0
     require_malware_scan: bool = False  # forced on in production unless allow_unscanned_uploads
     allow_unscanned_uploads: bool = False
 
     # AI provider
     ai_provider: str = "rule_based"  # rule_based (local, no data leaves the server) | anthropic
-    anthropic_api_key: str = ""
+    anthropic_api_key: SecretStr = SecretStr("")
     anthropic_model: str = "claude-sonnet-5-5"
     ai_timeout_seconds: float = 60.0
 
@@ -77,9 +94,18 @@ class Settings(BaseSettings):
             problems.append("JOBHUNTER_REQUIRE_VERIFIED_EMAIL must be true in production")
         if not self.rate_limit_enabled:
             problems.append("rate limiting cannot be disabled in production")
+        if self.rate_limit_backend == "redis" and not secret(self.redis_url):
+            problems.append("JOBHUNTER_REDIS_URL is required when rate_limit_backend=redis")
+        if self.rate_limit_backend != "redis" and not self.allow_process_local_rate_limit:
+            problems.append("production needs JOBHUNTER_RATE_LIMIT_BACKEND=redis (or, for ONE worker only, "
+                            "JOBHUNTER_ALLOW_PROCESS_LOCAL_RATE_LIMIT=true)")
+        if self.rate_limit_critical_fail_mode not in ("closed", "local"):
+            problems.append("JOBHUNTER_RATE_LIMIT_CRITICAL_FAIL_MODE must be closed or local")
         if not self.clamav_host and not self.allow_unscanned_uploads:
             problems.append("configure JOBHUNTER_CLAMAV_HOST or explicitly set JOBHUNTER_ALLOW_UNSCANNED_UPLOADS=true")
-        if self.ai_provider == "anthropic" and not self.anthropic_api_key:
+        if self.smtp_security not in ("starttls", "ssl"):
+            problems.append("JOBHUNTER_SMTP_SECURITY must be starttls or ssl in production")
+        if self.ai_provider == "anthropic" and not secret(self.anthropic_api_key):
             problems.append("JOBHUNTER_ANTHROPIC_API_KEY is required when ai_provider=anthropic")
         if problems:
             raise ValueError("Unsafe production configuration:\n- " + "\n- ".join(problems))

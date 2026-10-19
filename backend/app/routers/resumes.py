@@ -84,7 +84,9 @@ def generate_resume(job_id: UUID, body: ResumeGenerateIn = ResumeGenerateIn(),
     except ProviderError as exc:
         audit(db, user.id, "resume_generation_failed", "job", job.id, provider=provider.name)
         db.commit()
-        raise HTTPException(502, f"Resume drafting failed: {exc}")
+        code = {"rate_limited": 503, "timeout": 504}.get(exc.kind, 502)
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        raise HTTPException(code, f"Resume drafting failed: {exc}", headers=headers)
     v = _create_version(db, user, job, profile, draft, source="generated", provider=provider, parent=None,
                         template=body.template)
     audit(db, user.id, "resume_generated", "resume", v.id, job_id=str(job.id), provider=provider.name)

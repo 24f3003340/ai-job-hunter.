@@ -1,4 +1,4 @@
-# API reference (v0.2)
+# API reference (v0.3)
 
 Base path `/api/v1`. All endpoints except `auth/*` (register, login, password-reset, verify-email) and `/health`
 require `Authorization: Bearer <token>`. Foreign or unknown resource IDs always return **404**.
@@ -63,3 +63,14 @@ experience, projects, skills, certifications, preferences. Each PUT bumps `profi
 * `submit` never reports success: with no authorized connector it returns `submission: "manual_required"` and the
   official link; status stays `approved`. Users may record `submitted` only via `PATCH` with
   `user_reported_submission=true` (labelled `manual_user_reported`).
+
+## Operations
+| Endpoint | Notes |
+|---|---|
+| `GET /health` | Liveness only |
+| `GET /health/ready` | `200`/`503` with `database`, `rate_limit` (backend, ok, degraded_events) and `malware_scanner` (`configured:false` is reported honestly). Never returns URLs or secrets |
+
+Additional status codes: `503` + `Retry-After` when the rate-limit backend is down (critical endpoints, default fail-closed),
+when the AI provider is rate-limited/unconfigured, or when malware scanning is required but unavailable; `504` AI timeout;
+`422` for input PostgreSQL cannot store (e.g. NUL characters).
+E-mails (verification, reset) are sent after the response in a background task; a mail outage never fails the request.

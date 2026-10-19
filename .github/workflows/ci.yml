@@ -1,0 +1,36 @@
+# NOTE: written but NOT yet executed on GitHub (authored in a sandbox without Actions access).
+name: ci
+on: [push, pull_request]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: backend}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: pip install -e '.[dev,integration]'
+      - run: python -m pytest -q            # default: SQLite, no services, no network
+  integration:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: backend}}
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: jobhunter, POSTGRES_PASSWORD: devpassword, POSTGRES_DB: jobhunter_test}
+        ports: ["5433:5432"]
+        options: --health-cmd "pg_isready -U jobhunter" --health-interval 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6380:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-retries 20
+    env:
+      JOBHUNTER_TEST_DATABASE_URL: postgresql+psycopg://jobhunter:devpassword@127.0.0.1:5433/jobhunter_test
+      JOBHUNTER_TEST_REDIS_URL: redis://127.0.0.1:6380/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: pip install -e '.[dev,integration]'
+      - run: python -m pytest -q                       # whole unit suite on PostgreSQL (migration-built schema)
+      - run: python -m pytest -q -m integration        # PostgreSQL-specific, real SMTP protocol, Redis/multi-worker

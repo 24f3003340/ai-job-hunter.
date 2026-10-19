@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from ..audit import audit
 from ..config import settings
 from ..db import get_db
 from ..deps import current_session, current_user
-from ..mailer import send_email
+from ..mailer import deliver
 from ..models import AuthSession, CandidateProfile, User, utcnow
 from ..ratelimit import limit_ip
 from ..schemas import Credentials, EmailOnly, ResetConfirm, TokenBody, TokenOut
@@ -17,21 +17,23 @@ from ..security import create_session, hash_password, verify_password
 from ..services import tokens
 
 router = APIRouter(tags=["auth"])
-_auth_limit = limit_ip("auth", "rate_limit_auth")
+_auth_limit = limit_ip("auth", "rate_limit_auth", critical=True)
 
 # Verified against on unknown emails so response timing doesn't reveal account existence.
 _DUMMY_HASH = hash_password("not-a-real-password")
 
 
-def _send_verification(db: Session, user: User) -> None:
+def _queue_verification(db: Session, user: User, bg: BackgroundTasks) -> None:
+    """Token is stored now; the e-mail goes out after the response (and after commit), so an SMTP outage or
+    slow server can neither fail the request nor leak account existence through timing."""
     token = tokens.issue(db, user.id, "email_verify", timedelta(hours=settings.email_verify_ttl_hours))
-    send_email(user.email, "Verify your email",
+    bg.add_task(deliver, user.email, "Verify your email",
                f"Confirm your address: {settings.public_base_url}/verify-email?token={token}\n"
                f"This link expires in {settings.email_verify_ttl_hours} hours.")
 
 
 @router.post("/auth/register", response_model=TokenOut, status_code=201, dependencies=[_auth_limit])
-def register(body: Credentials, db: Session = Depends(get_db)):
+def register(body: Credentials, bg: BackgroundTasks, db: Session = Depends(get_db)):
     email = body.email.lower()
     user = User(email=email, password_hash=hash_password(body.password))
     db.add(user)
@@ -42,7 +44,7 @@ def register(body: Credentials, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_409_CONFLICT, "Unable to register with these details")
     db.add(CandidateProfile(user_id=user.id))
     audit(db, user.id, "register", "user", user.id)
-    _send_verification(db, user)
+    _queue_verification(db, user, bg)
     db.commit()
     return TokenOut(access_token=create_session(db, user.id))
 
@@ -87,13 +89,13 @@ def me(user: User = Depends(current_user)):
 # ---- password reset -------------------------------------------------------------------------
 
 @router.post("/auth/password-reset/request", status_code=202, dependencies=[_auth_limit])
-def request_password_reset(body: EmailOnly, db: Session = Depends(get_db)):
+def request_password_reset(body: EmailOnly, bg: BackgroundTasks, db: Session = Depends(get_db)):
     """Always answers identically, so it cannot be used to discover which e-mails have accounts."""
     user = db.scalar(select(User).where(User.email == body.email.lower()))
     if user is not None and user.account_status == "active" and \
             tokens.recent_count(db, user.id, "password_reset", timedelta(hours=1)) < settings.reset_requests_per_hour:
         token = tokens.issue(db, user.id, "password_reset", timedelta(minutes=settings.password_reset_ttl_minutes))
-        send_email(user.email, "Reset your password",
+        bg.add_task(deliver, user.email, "Reset your password",
                    f"Reset link: {settings.public_base_url}/reset-password?token={token}\n"
                    f"It expires in {settings.password_reset_ttl_minutes} minutes and works once. "
                    "If you did not ask for this, ignore this message.")
@@ -132,7 +134,7 @@ def verify_email(body: TokenBody, db: Session = Depends(get_db)):
 
 
 @router.post("/auth/resend-verification", status_code=202, dependencies=[_auth_limit])
-def resend_verification(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def resend_verification(bg: BackgroundTasks, user: User = Depends(current_user), db: Session = Depends(get_db)):
     if user.email_verified_at is not None:
         return {"detail": "Email already verified."}
     last = tokens.last_issued(db, user.id, "email_verify")
@@ -141,7 +143,7 @@ def resend_verification(user: User = Depends(current_user), db: Session = Depend
                             headers={"Retry-After": str(settings.verify_resend_cooldown_seconds)})
     if tokens.recent_count(db, user.id, "email_verify", timedelta(hours=1)) >= settings.verify_resends_per_hour:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many verification emails requested; try later")
-    _send_verification(db, user)
+    _queue_verification(db, user, bg)
     audit(db, user.id, "verification_resent", "user", user.id)
     db.commit()
     return {"detail": "Verification email sent."}

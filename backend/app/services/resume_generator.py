@@ -24,9 +24,29 @@ def snapshot_profile(profile, account_email: str) -> dict:
     }
 
 
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_PHONE = re.compile(r"(?<!\d)\+?\d[\d\s().-]{8,}\d(?!\d)")
+
+
+def _scrub(obj, name_re):
+    if isinstance(obj, str):
+        obj = _EMAIL.sub("[REDACTED]", _PHONE.sub("[REDACTED]", obj))
+        return name_re.sub("[REDACTED]", obj) if name_re else obj
+    if isinstance(obj, list):
+        return [_scrub(x, name_re) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _scrub(v, name_re) for k, v in obj.items()}
+    return obj
+
+
 def provider_view(snapshot: dict) -> dict:
-    """Data minimisation for external providers: no name, e-mail or phone."""
-    return {k: v for k, v in snapshot.items() if k not in ("full_name", "phone", "email", "profile_version")}
+    """Data minimisation for external providers: no name, e-mail or phone fields, and any occurrence of those
+    (plus other e-mail addresses / phone numbers) inside free text is redacted. The evidence refs stay valid
+    because only text is changed, never structure."""
+    name = (snapshot.get("full_name") or "").strip()
+    name_re = re.compile(re.escape(name), re.I) if len(name) >= 3 else None
+    view = {k: v for k, v in snapshot.items() if k not in ("full_name", "phone", "email", "profile_version")}
+    return _scrub(view, name_re)
 
 
 def job_view(job) -> dict:

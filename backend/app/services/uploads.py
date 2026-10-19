@@ -103,7 +103,8 @@ def scan(data: bytes) -> str:
     unless JOBHUNTER_ALLOW_UNSCANNED_UPLOADS=true is set deliberately.
     """
     if not scanner_configured():
-        if settings.require_malware_scan:
+        # Fail closed unless the operator deliberately allowed unscanned uploads (documented override).
+        if settings.require_malware_scan or (settings.env == "production" and not settings.allow_unscanned_uploads):
             raise UploadRejected(503, "Malware scanning is required but not configured")
         return "not_configured"
     try:
@@ -120,7 +121,8 @@ def scan(data: bytes) -> str:
 
 
 def _clamd_instream(data: bytes) -> str:
-    with socket.create_connection((settings.clamav_host, settings.clamav_port), timeout=10) as s:
+    with socket.create_connection((settings.clamav_host, settings.clamav_port),
+                                  timeout=settings.clamav_timeout_seconds) as s:
         s.sendall(b"zINSTREAM\0")
         for i in range(0, len(data), 8192):
             chunk = data[i:i + 8192]
@@ -130,3 +132,21 @@ def _clamd_instream(data: bytes) -> str:
         while not buf.endswith(b"\0") and (part := s.recv(4096)):
             buf += part
     return buf.rstrip(b"\0").decode(errors="replace").strip()
+
+
+def ping() -> bool:
+    """clamd liveness (PING -> PONG). Used by /health/ready."""
+    with socket.create_connection((settings.clamav_host, settings.clamav_port),
+                                  timeout=settings.clamav_timeout_seconds) as s:
+        s.sendall(b"zPING\0")
+        return s.recv(64).strip(b"\0\n ") == b"PONG"
+
+
+def scanner_status() -> dict:
+    if not scanner_configured():
+        return {"configured": False, "ok": settings.env != "production" or settings.allow_unscanned_uploads,
+                "note": "malware scanning NOT configured; uploads are stored unscanned"}
+    try:
+        return {"configured": True, "ok": ping()}
+    except OSError as exc:
+        return {"configured": True, "ok": False, "error": type(exc).__name__}
