@@ -165,6 +165,8 @@ jobs:
           BACKUP_PASSPHRASE: ci-backup-passphrase
           VERIFY_PYTHON: ${{ github.workspace }}/backend/.venv/bin/python
         run: |
+          # The container (uid 10001) writes uploads with private modes; in this test setup the host runner reads the bind mount.
+          sudo chmod -R a+rX .ci/uploads
           B=$(deploy/scripts/backup.sh)
           BACKUP=$B deploy/scripts/verify_restore.sh
       - name: Stack logs (on failure)
