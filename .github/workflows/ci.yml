@@ -1,17 +1,25 @@
-# NOTE: written but NOT yet executed on GitHub (authored in a sandbox without Actions access).
 name: ci
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  unit:
+  backend-unit:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: backend}}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
       - run: pip install -e '.[dev,integration]'
-      - run: python -m pytest -q            # default: SQLite, no services, no network
-  integration:
+      - run: python -m pytest -q            # default tier: SQLite, no services, no network
+
+  backend-integration:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: backend}}
     services:
@@ -30,7 +38,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
       - run: pip install -e '.[dev,integration]'
-      - run: python -m pytest -q                       # whole unit suite on PostgreSQL (migration-built schema)
-      - run: python -m pytest -q -m integration        # PostgreSQL-specific, real SMTP protocol, Redis/multi-worker
+      - run: python -m pytest -q                 # whole unit suite on PostgreSQL (Alembic-built schema)
+      - run: python -m pytest -q -m integration  # PostgreSQL-specific, real SMTP protocol, Redis + multi-worker
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: frontend}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  e2e:
+    needs: [backend-unit, frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - name: Backend virtualenv (used by the E2E harness)
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/pip install -e 'backend[dev]'
+      - name: Frontend dependencies and browsers
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Playwright end-to-end (real FastAPI + SQLite + Vite)
+        working-directory: frontend
+        env:
+          E2E_BROWSERS: ${{ matrix.browser }}
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          retention-days: 7
