@@ -39,8 +39,9 @@ for (const scheme of ['light', 'dark'] as const) {
     await audit(page, '/verify-email (error state)')
 
     // authenticated screens with real data
-    await register(page, uniqueEmail(`a11y-${scheme}`))
-    const d = await seedAccount(page, tok.get())
+    const email = uniqueEmail(`a11y-${scheme}`)
+    await register(page, email)
+    const d = await seedAccount(page, tok.get(), email)
     const routes: [string, string][] = [
       ['/', 'Dashboard'], ['/jobs', 'Jobs'], ['/jobs/new', 'Add a job'], [`/jobs/${d.job.id}`, 'NLP Engineer'], ['/profile', 'Profile'],
       ['/cv', 'CV upload'], [`/cv/${d.doc.id}`, 'Review parsed CV'], [`/resumes/${d.resume.id}`, 'Resume version 1'],
@@ -114,8 +115,9 @@ for (const width of [320, 640]) {   // WCAG 1.4.10 reflow: 320px wide == 400% zo
   test(`reflow at ${width}px (zoom equivalent): no horizontal scrolling, nothing clipped`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 })
     const tok = captureToken(page)
-    await register(page, uniqueEmail(`zoom${width}`))
-    const d = await seedAccount(page, tok.get())
+    const email = uniqueEmail(`zoom${width}`)
+    await register(page, email)
+    const d = await seedAccount(page, tok.get(), email)
     for (const route of ['/', '/jobs', `/jobs/${d.job.id}`, '/profile', '/cv', `/resumes/${d.flagged.id}`, '/applications', `/applications/${d.app.id}`, '/settings']) {
       await spaNavigate(page, route)
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
@@ -128,7 +130,8 @@ for (const width of [320, 640]) {   // WCAG 1.4.10 reflow: 320px wide == 400% zo
 
 test('text can be enlarged: 200% default font size keeps every control usable', async ({ page }) => {
   await register(page, uniqueEmail('font'))
-  await page.addStyleTag({ content: 'html { font-size: 200% !important }' })
+  // CSSOM assignment (an injected <style> tag would, rightly, be blocked by the deployment's strict CSP)
+  await page.evaluate(() => { document.documentElement.style.setProperty('font-size', '200%', 'important') })
   await spaNavigate(page, '/settings')
   await expect(page.getByRole('button', { name: 'Log out' }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Delete my account…' })).toBeVisible()

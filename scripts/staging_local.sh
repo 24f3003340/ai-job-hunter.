@@ -13,9 +13,21 @@ case "${1:-}" in
 stop)
   for f in gateway api smtp redis; do [ -f "$S/$f.pid" ] && kill "$(cat "$S/$f.pid")" 2>/dev/null || true; done
   [ -d "$S/pgdata" ] && { su postgres -c "$PGBIN/pg_ctl -D $S/pgdata -m fast stop" >/dev/null 2>&1 || true; }
+  # Leftovers from an earlier run (e.g. orphaned uvicorn workers) would silently keep serving OLD code on our ports.
+  # Match on our exact command lines ([x] trick: the pattern does not match this shell's own command line).
+  for pat in "[s]taging_gateway:app" "[u]vicorn app.main:app --host 127.0.0.1 --port $API_PORT" "[s]mtp_sink.py --port $SMTP_PORT" "[r]edis-server .*:$REDISPORT"; do
+    for pid in $(pgrep -f "$pat" 2>/dev/null); do
+      for child in $(pgrep -P "$pid" 2>/dev/null); do kill -9 "$child" 2>/dev/null || true; done
+      kill "$pid" 2>/dev/null || true
+    done
+  done
+  sleep 1
   echo stopped ;;
 start)
   "$0" stop >/dev/null 2>&1 || true
+  for port in "$HTTPS_PORT" "$API_PORT" "$SMTP_PORT" "$REDISPORT" "$PGPORT"; do
+    (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && { echo "port $port is still in use; refusing to start (a leftover process would silently serve old code)" >&2; exit 1; }
+  done
   rm -rf "$S" && mkdir -p "$S/storage" "$S/mail" && chmod 777 "$S"
   # 1. TLS certificate valid for localhost / 127.0.0.1 (used by the gateway AND trusted by the backend for SMTP)
   openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=localhost" -keyout "$S/key.pem" -out "$S/cert.pem" \
@@ -48,7 +60,7 @@ start)
   (cd "$ROOT/backend" && setsid nohup "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" --workers 2 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-server-header >"$S/api.log" 2>&1 </dev/null & echo $! > "$S/api.pid")
   # 6. gateway
   (cd "$ROOT" && UPSTREAM="http://127.0.0.1:$API_PORT" DIST="$ROOT/frontend/dist" setsid nohup "$PY" -m uvicorn --app-dir scripts staging_gateway:app --host 127.0.0.1 --port "$HTTPS_PORT" \
-     --ssl-keyfile "$S/key.pem" --ssl-certfile "$S/cert.pem" --log-level warning >"$S/gateway.log" 2>&1 </dev/null & echo $! > "$S/gateway.pid")
+     --no-proxy-headers --no-server-header --ssl-keyfile "$S/key.pem" --ssl-certfile "$S/cert.pem" --log-level warning >"$S/gateway.log" 2>&1 </dev/null & echo $! > "$S/gateway.pid")
   for i in $(seq 1 60); do curl -sk "https://localhost:$HTTPS_PORT/health" | grep -q ok && break; sleep 0.5; done
   curl -sk "https://localhost:$HTTPS_PORT/health" | grep -q ok || { echo "stack did not come up; see $S/*.log" >&2; exit 1; }
   echo "staging-like stack up: https://localhost:$HTTPS_PORT   (mail dir: $S/mail)"

@@ -54,8 +54,11 @@ export async function shot(page: Page, name: string, fullPage = true) {
 }
 
 /** Seed realistic data through the API (as a user would via the UI) so every screen has content to audit. */
-export async function seedAccount(page: Page, token: string) {
+export async function seedAccount(page: Page, token: string, email: string) {
   const H = { Authorization: `Bearer ${token}` }
+  // Production-configured deployments require a verified e-mail before generating resumes.
+  const vt = latestMailToken(email, 'Verify your email')
+  await page.request.post('/api/v1/auth/verify-email', { data: { token: vt } })
   const cv = path.join(E2E_DIR, 'cv.pdf')
   const up = await page.request.post('/api/v1/documents/upload', { headers: H, multipart: { document_type: 'cv', file: { name: 'cv.pdf', mimeType: 'application/pdf', buffer: readFileSync(cv) } } })
   const doc = await up.json()
