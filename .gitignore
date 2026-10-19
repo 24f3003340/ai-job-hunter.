@@ -6,3 +6,7 @@ __pycache__/
 .pytest_cache/
 node_modules/
 var/
+frontend/dist/
+frontend/.e2e/
+frontend/playwright-report/
+frontend/test-results/

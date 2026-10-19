@@ -1,11 +1,16 @@
 # AI Job Hunter & Application Copilot
 
-FastAPI + SQLAlchemy modular monolith. This repo currently contains the **backend only**
-(CV upload → parsing → confirmation → tailored resume → approval-gated application draft).
+FastAPI + SQLAlchemy modular monolith (`backend/`) plus a React + TypeScript frontend (`frontend/`, see [`docs/FRONTEND.md`](docs/FRONTEND.md)).
+The backend covers CV upload → parsing → confirmation → tailored resume → approval-gated application draft.
 See [`docs/SECURITY.md`](docs/SECURITY.md) for the security checklist and what is *not* verified.
 See [`docs/API.md`](docs/API.md) for endpoints and [`docs/REPORT.md`](docs/REPORT.md) for status and limitations.
 
-## Local setup
+## Frontend quick start
+    cd frontend && cp .env.example .env && npm install
+    npm run dev          # http://localhost:5173, proxies /api to the backend on :8000
+    npm run lint && npm run typecheck && npm run build && npm test && npx playwright test
+
+## Local setup (backend)
 Requires Python 3.11+.
 
     cd backend
