@@ -22,8 +22,14 @@ x-backend-env: &backend-env
   JOBHUNTER_SMTP_USER: ${SMTP_USER:-}
   JOBHUNTER_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   JOBHUNTER_SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+  JOBHUNTER_SMTP_CA_FILE: ${SMTP_CA_FILE:-}                # only for a private CA / test sink; leave empty for public providers
   JOBHUNTER_CLAMAV_HOST: ${CLAMAV_HOST:-}
   JOBHUNTER_ALLOW_UNSCANNED_UPLOADS: ${ALLOW_UNSCANNED_UPLOADS:-false}
+  # Rate limits: these defaults are the production-safe ones. Only automated tests should raise them.
+  JOBHUNTER_RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-10/minute}
+  JOBHUNTER_RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-300/minute}
+  JOBHUNTER_RATE_LIMIT_UPLOAD: ${RATE_LIMIT_UPLOAD:-10/hour}
+  JOBHUNTER_RATE_LIMIT_GENERATE: ${RATE_LIMIT_GENERATE:-20/hour}
   JOBHUNTER_AI_PROVIDER: ${AI_PROVIDER:-rule_based}
   JOBHUNTER_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 

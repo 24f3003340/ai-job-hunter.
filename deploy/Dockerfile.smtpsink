@@ -1,0 +1,5 @@
+# TEST-ONLY SMTP sink (STARTTLS + AUTH, self-signed cert, writes .eml files). Used by docker-compose.ci.yml. Context: repo root.
+FROM python:3.13-slim
+RUN pip install --no-cache-dir aiosmtpd cryptography
+COPY scripts/smtp_sink.py /smtp_sink.py
+CMD ["python", "/smtp_sink.py", "--bind", "0.0.0.0", "--port", "2525", "--host-name", "smtp", "--cert-dir", "/certs", "--user", "mailer", "--password", "sinkpw", "--dir", "/mail"]
