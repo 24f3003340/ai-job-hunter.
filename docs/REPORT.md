@@ -115,7 +115,9 @@ Blockers are listed in `docs/BETA_ROADMAP.md` (P0).
 | Fix | `[tool.setuptools.packages.find] include = ["app*"]`; verified in a brand-new virtualenv (196 tests pass from a clean install) |
 | Jobs now in `.github/workflows/ci.yml` | `backend-unit`, `backend-integration` (PostgreSQL 16 + Redis 7 service containers), `frontend` (lint, typecheck, build, Vitest), `e2e` (matrix **chromium / firefox / webkit**), `staging-compose` (boots the real Docker Compose stack) |
 | First run with the fix (run 5, commit 0a94d00) | **backend-unit ✓, backend-integration ✓, frontend ✓, e2e firefox ✓, e2e webkit ✓, e2e chromium ✗** (one test, password-reset, did not see its success message; passed 8/8 locally; not reproduced). The harness now prints page text and failed API calls into the log on failure so a recurrence explains itself |
-| Later runs | See the CI status table at the end of this section (filled in from the actual runs) |
+| Run 18 (commit 2493c8e) | Compose stack passed the HTTPS smoke test (33/33 steps) and 13/14 browser tests; the Caddy readiness hiding was not yet effective in that run's logs, WebKit `/cv` overflowed by 56px at 320px, Chromium reset test failed (native `required` validation blocked a submit before the value was in the field) |
+| **Run 19 (commit 44e0f6d, `workflow_dispatch`)** | **All 7 jobs green, evidence read from the job logs:** backend-unit 196 passed; backend-integration 25 passed (PostgreSQL 16 + Redis 7 service containers); frontend 93 Vitest tests passed; e2e chromium 14/14, firefox 14/14, webkit 14/14 (axe light + dark, keyboard, reflow 320/640, 200% text); staging-compose: Docker Compose stack built and started, smoke test 33/33 over HTTPS through Caddy (including "readiness endpoint is not public"), Playwright against the stack 14/14, encrypted backup + `verify_restore.sh` printed `RESTORE VERIFIED` (Alembic revision 0002, row counts for 13 tables, file hashes) |
+| Not covered by any CI run | Let's Encrypt issuance, a real domain/host, a real SMTP provider, ClamAV, the live Anthropic provider (all opt-in / manual, see below). GitHub reports job status as "queued" for these runs, so the evidence above is the log content, not the status badge |
 
 ## 2. Deployment artifacts (code in the repo)
 `deploy/Dockerfile.backend`, `Dockerfile.web` (Vite build → Caddy), `Caddyfile`, `docker-compose.staging.yml`, `docker-compose.ci.yml`
@@ -182,7 +184,7 @@ scripts/staging_local.sh stop
 | HTTPS/CSP/headers | Verified through the Python gateway stand-in (CSP taken from the Caddyfile; drift test) and, via CI, through real Caddy with its internal CA |
 | ClamAV | **Unverified** (opt-in `tests/external/test_clamav_real.py`; production profile exists in compose but was never started) |
 | Live Anthropic API | **Unverified** (opt-in `tests/external/test_anthropic_live.py`, billable); mocked HTTP only |
-| Firefox / WebKit | **Verified in CI only** (see table) |
+| Firefox / WebKit | **Verified in CI only**: 14/14 each in run 19 (not run in the authoring sandbox) |
 | Off-site backup transport, scheduled backups, monitoring, alerting | **Not built** (procedures in OPERATIONS.md) |
 
 ## 8. Remaining blockers
