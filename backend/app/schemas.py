@@ -1,13 +1,25 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
 
 class Credentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=256)
+
+
+class EmailOnly(BaseModel):
+    email: EmailStr
+
+
+class TokenBody(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+class ResetConfirm(TokenBody):
+    new_password: str = Field(min_length=10, max_length=256)
 
 
 class TokenOut(BaseModel):
@@ -21,11 +33,40 @@ class SkillIn(BaseModel):
     verified: bool = False
 
 
+DateStr = Annotated[str, StringConstraints(pattern=r"^\d{4}(-(0[1-9]|1[0-2]))?$")]  # YYYY or YYYY-MM
+
+
 class EducationIn(BaseModel):
-    degree: str
-    institution: str = ""
-    status: Literal["completed", "in_progress"]  # never inferred
+    degree: str = Field(min_length=1, max_length=300)
+    institution: str = Field(default="", max_length=300)
+    status: Literal["completed", "in_progress"]  # always explicit; never inferred
+    start_date: DateStr | None = None
+    end_date: DateStr | None = None
     verified: bool = False
+
+
+class ExperienceIn(BaseModel):
+    title: str = Field(default="", max_length=300)
+    employer: str = Field(default="", max_length=300)
+    start_date: DateStr | None = None
+    end_date: DateStr | None = None
+    current: bool = False
+    description: str = Field(default="", max_length=5000)
+    bullets: list[Annotated[str, StringConstraints(max_length=1000)]] = Field(default=[], max_length=30)
+
+
+class ProjectIn(BaseModel):
+    name: str = Field(default="", max_length=300)
+    description: str = Field(default="", max_length=5000)
+    bullets: list[Annotated[str, StringConstraints(max_length=1000)]] = Field(default=[], max_length=30)
+    technologies: list[str] = Field(default=[], max_length=40)
+    url: str | None = None
+
+
+class CertificationIn(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    issuer: str = Field(default="", max_length=300)
+    date: DateStr | None = None
 
 
 class Preferences(BaseModel):
@@ -43,14 +84,21 @@ class ProfileIO(BaseModel):
     full_name: str = ""
     phone: str = ""
     education: list[EducationIn] = []
-    experience: list[dict] = []
-    projects: list[dict] = []
+    experience: list[ExperienceIn] = []
+    projects: list[ProjectIn] = []
     skills: list[SkillIn] = []
+    certifications: list[CertificationIn] = []
     preferences: Preferences = Preferences()
 
 
 class ProfileOut(ProfileIO):
     profile_version: int
+
+
+class ConfirmCv(BaseModel):
+    parse_id: UUID
+    acknowledged_flags: list[str] = []
+    profile: ProfileIO
 
 
 class JobIn(BaseModel):
@@ -112,3 +160,16 @@ class StatusUpdate(BaseModel):
     status: str
     note: str = ""
     user_reported_submission: bool = False
+
+
+class ResumeGenerateIn(BaseModel):
+    template: str = "classic"
+
+
+class ReviewIn(BaseModel):
+    decision: Literal["accept", "reject"]
+    note: str = Field(default="", max_length=1000)
+
+
+class SetResumeIn(BaseModel):
+    resume_version_id: UUID

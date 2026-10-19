@@ -5,6 +5,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .resume_review import BLOCKING, review_state
 from ..models import Application, ApplicationApproval, ApplicationEvent, CoverLetter, Job, ResumeVersion, utcnow
 
 STATUSES = [
@@ -37,6 +38,9 @@ def package_hash(db: Session, app: Application) -> str:
     payload = {
         "job_id": str(job.id), "job_content_hash": job.content_hash, "application_url": job.application_url,
         "resume_id": str(resume.id) if resume else None, "resume": resume.content_json if resume else None,
+        "resume_hash": resume.content_hash if resume else None,
+        # review decisions are part of what the user approved: changing one invalidates the approval
+        "resume_review": sorted(review_state(db, resume)["decisions"].items()) if resume else None,
         "cover_letter_id": str(letter.id) if letter else None, "cover_letter": letter.content if letter else None,
         "answers": sorted(([a.question, a.answer] for a in app.answers)),
     }
@@ -76,9 +80,20 @@ def blockers(db: Session, app: Application) -> list[str]:
         out.append("Job listing is expired")
     if not job.application_url:
         out.append("Job has no verified application URL")
-    if app.resume_version_id is None:
-        out.append("No tailored resume attached")
+    out += resume_blockers(db, app)
     unconfirmed = [a.question for a in app.answers if not a.user_confirmed]
     if unconfirmed:
         out.append(f"{len(unconfirmed)} answer(s) not confirmed by you")
     return out
+
+
+def resume_blockers(db: Session, app: Application) -> list[str]:
+    if app.resume_version_id is None:
+        return ["No tailored resume attached"]
+    resume = db.get(ResumeVersion, app.resume_version_id)
+    if resume is None or resume.user_id != app.user_id or resume.job_id != app.job_id:
+        return ["Attached resume does not belong to this job"]
+    state = review_state(db, resume)
+    if state["status"] in BLOCKING:
+        return [f"Resume has factual claims awaiting your review (status: {state['status']})"]
+    return []

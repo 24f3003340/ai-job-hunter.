@@ -7,6 +7,21 @@ from app.db import Base, get_db, make_engine
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def _isolated_runtime(tmp_path, monkeypatch):
+    """Fresh limiter, outbox and private storage dir for every test; no network, no real e-mail."""
+    from app.config import settings
+    from app.mailer import OUTBOX
+    from app.ratelimit import limiter
+
+    monkeypatch.setattr(settings, "email_backend", "outbox")
+    monkeypatch.setattr(settings, "storage_dir", tmp_path / "storage")
+    monkeypatch.setattr(settings, "clamav_host", "")
+    OUTBOX.clear()
+    limiter.reset()
+    yield
+
+
 @pytest.fixture()
 def engine():
     eng = make_engine("sqlite:///:memory:")
