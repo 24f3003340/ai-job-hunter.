@@ -166,3 +166,42 @@ def test_production_config_validates_with_the_compose_environment(monkeypatch):
                  redis_url="redis://:pw@redis:6379/0", email_backend="smtp", smtp_host="smtp.example.com",
                  smtp_security="starttls", allow_unscanned_uploads=True, ai_provider="rule_based")
     assert s.env == "production"
+
+
+# ---- deletion ledger / re-apply after restore -----------------------------------------------
+
+def test_account_deletion_is_logged_without_personal_data(client, auth, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        assert client.delete("/api/v1/account", headers=auth).status_code == 204
+    lines = [r.getMessage() for r in caplog.records if "account_deleted" in r.getMessage()]
+    assert len(lines) == 1 and re.fullmatch(r"account_deleted user_id=[0-9a-f-]{36}", lines[0])
+    assert "@" not in lines[0]
+
+
+def test_reapply_deletions_removes_users_and_files_and_is_idempotent(client, auth, session_factory):
+    from sqlalchemy import select
+    from app.models import Document, User
+    ra = load(ROOT / "backend/scripts/reapply_deletions.py", "reapply_deletions")
+    upload(client, auth, make_pdf(), "cv.pdf")
+    with session_factory() as s:
+        uid = s.scalar(select(User.id))
+        key = s.scalar(select(Document.storage_key))
+    objects = settings.storage_dir / "objects"
+    assert (objects / key).exists()
+    with session_factory() as s:                     # dry run changes nothing
+        assert ra.apply(s, {uid}, objects, dry_run=True)["users"] == 1
+        assert s.get(User, uid) is not None and (objects / key).exists()
+    with session_factory() as s:
+        assert ra.apply(s, {uid}, objects, dry_run=False) == {"users": 1, "files": 1, "already_absent": 0, "dry_run": False}
+    with session_factory() as s:
+        assert s.get(User, uid) is None and not s.scalars(select(Document)).all()
+    assert not (objects / key).exists()
+    with session_factory() as s:                     # second run: nothing left, no error
+        assert ra.apply(s, {uid}, objects, dry_run=False)["already_absent"] == 1
+
+
+def test_reapply_pattern_extracts_ids_from_log_noise():
+    ra = load(ROOT / "backend/scripts/reapply_deletions.py", "reapply_deletions2")
+    text = "x WARNING app.routers.auth account_deleted user_id=11111111-2222-3333-4444-555555555555 more\nnoise\n"
+    assert ra.PATTERN.findall(text) == ["11111111-2222-3333-4444-555555555555"]

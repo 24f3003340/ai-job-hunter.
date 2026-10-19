@@ -3,7 +3,7 @@
 (so backups/restores have real content); pass --cleanup to delete the account at the end.
 
     STAGING_URL=https://localhost:8443 STAGING_MAIL_DIR=.staging/mail [STAGING_INSECURE=1] python scripts/staging_smoke.py
-For a real staging host with a real mailbox, supply the verification token yourself: STAGING_TOKEN_FROM=prompt.
+For a real staging host with a real mailbox, paste the verification token when asked: STAGING_TOKEN_FROM=prompt.
 Exit status 0 = every step passed.
 """
 import argparse
@@ -53,6 +53,8 @@ def finish() -> int:
 
 
 def mail_token(email: str, subject: str) -> str:
+    if os.environ.get("STAGING_TOKEN_FROM") == "prompt":  # real mailbox: copy the token= value from the link in the e-mail
+        return input(f"Paste the token from the '{subject}' e-mail sent to {email}: ").strip()
     for _ in range(60):
         for f in sorted(MAIL_DIR.glob("*.eml"), key=lambda p: p.stat().st_mtime, reverse=True):
             raw = f.read_text(errors="replace").replace("=\n", "").replace("=3D", "=")

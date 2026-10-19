@@ -76,7 +76,9 @@ backend's `JOBHUNTER_CORS_ORIGINS`.
 | Type check | `npm run typecheck` |
 | Production build | `npm run build` |
 | Unit/component tests (MSW-mocked network; any unmocked request fails) | `npm test` |
-| End-to-end (real FastAPI + SQLite + Vite; no external services) | `npx playwright test` |
+| End-to-end, all browsers installed locally (real FastAPI + SQLite + Vite; no external services) | `npx playwright test` (set `E2E_BROWSERS=chromium,firefox,webkit` after `npx playwright install`) |
+| End-to-end against a running deployment | `E2E_EXTERNAL=1 E2E_BASE_URL=https://host E2E_MAIL_DIR=<sink dir> npx playwright test` |
+| Accessibility audit only (axe WCAG 2.2 AA incl. contrast, light+dark, headings, focus, reflow 320/640 px, 200 % text) | `npx playwright test e2e/a11y.spec.ts` |
 
 The E2E suite starts the backend itself (`e2e/backend.sh`: temp SQLite DB, file-based mail, rule-based AI, no scanner) and
 uses a preinstalled Chromium if found (`PW_CHROMIUM_PATH` to override, otherwise `npx playwright install chromium`).
@@ -107,7 +109,17 @@ Screenshots from the E2E run: `docs/screenshots/` (login, dashboard, CV draft wi
 8. No endpoint telling the client which AI provider is active, so the consent text is generic.
 9. The resume **edit** endpoint exists but has no UI yet.
 
+## Accessibility results (Phase H)
+`e2e/a11y.spec.ts` runs in a real browser (so contrast is actually measured): **every screen** — public pages, dashboard, jobs, job
+detail, profile, CV list and draft with warnings, both resume versions, applications, application review, settings and the delete
+dialog — passes axe `wcag2a/aa`, `wcag21a/aa`, `wcag22aa` and best-practice rules in **light and dark** mode. It also asserts one `h1`
+per page with no skipped heading levels, a `main` landmark, a visible focus ring on every tab stop with DOM order = visual order,
+keyboard-only registration, validation-summary focus + `aria-describedby`/`aria-invalid`, no horizontal scroll at 320 px and 640 px
+widths (WCAG 1.4.10 reflow ≈ 400 %/200 % zoom) and a usable settings page at 200 % font size.
+The audit found and fixed one real defect: white text on the light-red *danger* button in dark mode (contrast 2.28:1).
+Browser matrix: Chromium locally; **Chromium, Firefox and WebKit in CI** (see `docs/REPORT.md` for the run that proved it).
+
 ## Not verified
-Real-browser coverage is Chromium only (no Firefox/WebKit); no screen-reader testing; axe covers automated checks on four
-screens only; dark-mode contrast and 200 % zoom were not measured; no visual-regression tests; the CSP and reverse-proxy setup
-were not exercised in a deployment; the E2E suite has not been run in CI; all backend caveats in `docs/REPORT.md` still apply.
+No screen-reader testing by a human (NVDA/JAWS/VoiceOver); automated axe cannot judge reading order meaning, link text quality or
+cognitive load; no visual-regression tests; the CSP/reverse-proxy setup has been exercised on a staging-like stack and (via CI) the
+compose stack, but not on a public domain with a real certificate; all backend caveats in `docs/REPORT.md` still apply.

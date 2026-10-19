@@ -19,7 +19,8 @@ Legend: ✅ implemented **and tested here** · 🟡 implemented, tested only aga
 ## Transport & mail
 - ✅ SMTP: STARTTLS or implicit TLS with certificate **and hostname** verification; credentials never sent before TLS; plaintext only with no credentials outside production; header-injection guarded
 - 🟡 Verified against a local aiosmtpd (self-signed CA), **not** a production provider; SPF/DKIM/DMARC deliverability is unverified
-- ⬜ TLS termination for the API itself (deploy behind a TLS proxy; `TRUST_PROXY_HEADERS` only then)
+- 🟡 TLS termination: `deploy/Caddyfile` (HSTS, CSP, nosniff, frame-ancestors none, XFF overwrite, body limit, token-redacted logs) is exercised via the CI compose job and a Python gateway stand-in; **no public certificate/DNS has been issued**
+- ✅ Frontend CSP: strict policy served as a header by the gateway and the browser E2E fails on any CSP violation; Caddy/Vite policies are kept identical by a test
 
 ## Uploads
 - ✅ Content sniffing + extension match, size/page/zip-bomb limits, PDF active content and encrypted PDFs, DOCX macros rejected; private 0600 storage with random names; atomic writes; temp cleanup; authenticated owner-only download
@@ -43,6 +44,13 @@ Legend: ✅ implemented **and tested here** · 🟡 implemented, tested only aga
 ## Database
 - ✅ Schema from Alembic verified on SQLite and PostgreSQL 16: zero drift, upgrade-with-data, downgrade, FK cascades, constraint races
 - ⬜ Backups/restore drills, row-level security, connection-pool tuning, other PostgreSQL versions / managed services
+
+## Deployment & backups
+- ✅ Production config refuses to start unsafely; staging runs with `JOBHUNTER_ENV=production`
+- ✅ Uploads volume mounted only in the backend; no web route maps to it (tested over HTTPS)
+- ✅ Backup + encrypted backup + `verify_restore.sh` (row counts, Alembic revision, file checksums); tamper / wrong passphrase / lost file are detected
+- ✅ Deleted accounts can be re-applied after restoring an older backup (`reapply_deletions.py`)
+- ⬜ Scheduled/off-site backups, key management for `BACKUP_PASSPHRASE`, PITR/WAL archiving
 
 ## Operational
 - ✅ `/health/ready` reports DB, limiter, scanner (no secrets)

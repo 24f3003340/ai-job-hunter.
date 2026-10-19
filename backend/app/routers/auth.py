@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +18,7 @@ from ..schemas import Credentials, EmailOnly, ResetConfirm, TokenBody, TokenOut
 from ..security import create_session, hash_password, verify_password
 from ..services import tokens
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
 _auth_limit = limit_ip("auth", "rate_limit_auth", critical=True)
 
@@ -174,6 +177,9 @@ def delete_account(user: User = Depends(current_user), db: Session = Depends(get
 
     delete_user_files(db, user.id)
     audit(db, user.id, "account_deleted", "user", user.id)
+    # Deletion ledger line (UUID only, no personal data). Operators ship logs off-box; backend/scripts/reapply_deletions.py
+    # replays these after a restore so deleted accounts do not come back from an older backup.
+    log.warning("account_deleted user_id=%s", user.id)
     db.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
     db.delete(user)
     db.commit()

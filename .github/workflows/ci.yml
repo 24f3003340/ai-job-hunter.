@@ -1,6 +1,7 @@
 name: ci
 on:
   push:
+    branches: [main]     # feature branches are covered by the pull_request event (avoids running everything twice)
   pull_request:
   workflow_dispatch:
 

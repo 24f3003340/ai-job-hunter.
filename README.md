@@ -5,6 +5,13 @@ The backend covers CV upload → parsing → confirmation → tailored resume �
 See [`docs/SECURITY.md`](docs/SECURITY.md) for the security checklist and what is *not* verified.
 See [`docs/API.md`](docs/API.md) for endpoints and [`docs/REPORT.md`](docs/REPORT.md) for status and limitations.
 
+## Deploying and operating
+* [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — staging guide (Docker Compose: Caddy HTTPS, FastAPI, PostgreSQL, Redis, private uploads, backups, restore verification) and what is code vs manual work.
+* [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — logging, monitoring, rate limits, backups, account deletion, privacy, incident response, release checklist.
+* [`docs/BETA_ROADMAP.md`](docs/BETA_ROADMAP.md) — prioritised work before a public beta (P0/P1/P2).
+* Without Docker: `scripts/staging_local.sh start` boots a staging-*like* stack natively (PostgreSQL, password-protected Redis, production-config backend with 2 workers, TLS gateway stand-in, STARTTLS SMTP sink); then `scripts/staging_smoke.py` and `E2E_EXTERNAL=1 npx playwright test` test it.
+* CI (`.github/workflows/ci.yml`): backend unit, backend integration (PostgreSQL+Redis), frontend lint/types/build/tests, Playwright E2E on Chromium/Firefox/WebKit, and a job that boots the real compose stack.
+
 ## Frontend quick start
     cd frontend && cp .env.example .env && npm install
     npm run dev          # http://localhost:5173, proxies /api to the backend on :8000
