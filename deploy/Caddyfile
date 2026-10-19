@@ -36,7 +36,9 @@
 
 	# Readiness exposes internal state: reachable only inside the Docker network (compose healthchecks), not from the internet.
 	@ready path /health/ready
-	respond @ready 404
+	handle @ready {
+		respond 404
+	}
 
 	handle /api/* {
 		request_body {

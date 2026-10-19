@@ -132,7 +132,7 @@ def test_caddyfile_has_the_security_critical_directives():
     assert "header_up X-Forwarded-For {remote_host}" in c      # overwrite, not append
     assert "replace token REDACTED" in c                        # e-mailed tokens never land in access logs
     assert "request>headers>Authorization delete" in c
-    assert "max_size 6MB" in c and "respond @ready 404" in c
+    assert "max_size 6MB" in c and "handle @ready" in c and "respond 404" in c
     assert "frame-ancestors 'none'" in c and "Strict-Transport-Security" in c
 
 

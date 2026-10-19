@@ -64,3 +64,4 @@ table { width: 100%; border-collapse: collapse; } th, td { text-align: left; pad
 ul.clean { list-style: none; padding: 0; margin: 0; } ul.clean li { padding: .4rem 0; border-bottom: 1px solid var(--border); }
 @media (max-width: 640px) { h1 { font-size: 1.35rem; } main { padding: .75rem; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+input[type=file] { width: 100%; max-width: 100%; min-width: 0; }
