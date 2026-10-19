@@ -23,7 +23,7 @@ def get_profile(db: Session, user: User) -> CandidateProfile:
 def _out(p: CandidateProfile) -> ProfileOut:
     return ProfileOut(
         full_name=p.full_name, phone=p.phone, education=p.education_json, experience=p.experience_json,
-        projects=p.projects_json, skills=p.skills_json, preferences=p.preferences_json or {},
+        projects=p.projects_json, skills=p.skills_json, certifications=p.certifications_json or [], preferences=p.preferences_json or {},
         profile_version=p.profile_version,
     )
 
@@ -41,7 +41,9 @@ def update_profile(body: ProfileIO, user: User = Depends(current_user), db: Sess
     p.full_name, p.phone = body.full_name, body.phone
     p.education_json = [e.model_dump() for e in body.education]
     p.skills_json = [s.model_dump() for s in body.skills]
-    p.experience_json, p.projects_json = body.experience, body.projects
+    p.experience_json = [e.model_dump() for e in body.experience]
+    p.projects_json = [x.model_dump() for x in body.projects]
+    p.certifications_json = [c.model_dump() for c in body.certifications]
     p.preferences_json = body.preferences.model_dump()
     p.profile_version += 1
     audit(db, user.id, "profile_updated", "profile", p.id, version=p.profile_version)

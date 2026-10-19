@@ -5,3 +5,14 @@ __pycache__/
 *.db
 .pytest_cache/
 node_modules/
+var/
+frontend/dist/
+frontend/.e2e/
+frontend/playwright-report/
+frontend/test-results/
+deploy/.env.staging
+deploy/.env.*
+!deploy/.env.staging.example
+var/
+.staging/
+.ci/

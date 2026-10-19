@@ -1,0 +1,108 @@
+# Staging stack: Caddy (HTTPS, static SPA, /api proxy) -> FastAPI -> PostgreSQL + Redis, private upload volume.
+#
+#   cp deploy/.env.staging.example deploy/.env.staging     # then fill in every CHANGE_ME
+#   docker compose -f deploy/docker-compose.staging.yml --env-file deploy/.env.staging up -d --build
+#
+# Only Caddy publishes ports. PostgreSQL, Redis and the backend are reachable on the internal network only.
+name: jobhunter-staging
+
+x-backend-env: &backend-env
+  JOBHUNTER_ENV: production                       # staging uses the production safety checks on purpose
+  JOBHUNTER_DATABASE_URL: postgresql+psycopg://jobhunter:${POSTGRES_PASSWORD}@postgres:5432/jobhunter
+  JOBHUNTER_PUBLIC_BASE_URL: https://${SITE_ADDRESS}
+  JOBHUNTER_CORS_ORIGINS: '["https://${SITE_ADDRESS}"]'   # same-origin deployment; the list must still be explicit https
+  JOBHUNTER_TRUST_PROXY_HEADERS: "true"           # safe only because Caddy overwrites X-Forwarded-For
+  JOBHUNTER_REQUIRE_VERIFIED_EMAIL: "true"
+  JOBHUNTER_RATE_LIMIT_BACKEND: redis
+  JOBHUNTER_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  JOBHUNTER_EMAIL_BACKEND: smtp
+  JOBHUNTER_EMAIL_FROM: ${EMAIL_FROM}
+  JOBHUNTER_SMTP_HOST: ${SMTP_HOST}
+  JOBHUNTER_SMTP_PORT: ${SMTP_PORT:-587}
+  JOBHUNTER_SMTP_USER: ${SMTP_USER:-}
+  JOBHUNTER_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  JOBHUNTER_SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+  JOBHUNTER_SMTP_CA_FILE: ${SMTP_CA_FILE:-}                # only for a private CA / test sink; leave empty for public providers
+  JOBHUNTER_CLAMAV_HOST: ${CLAMAV_HOST:-}
+  JOBHUNTER_ALLOW_UNSCANNED_UPLOADS: ${ALLOW_UNSCANNED_UPLOADS:-false}
+  # Rate limits: these defaults are the production-safe ones. Only automated tests should raise them.
+  JOBHUNTER_RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-10/minute}
+  JOBHUNTER_RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-300/minute}
+  JOBHUNTER_RATE_LIMIT_UPLOAD: ${RATE_LIMIT_UPLOAD:-10/hour}
+  JOBHUNTER_RATE_LIMIT_GENERATE: ${RATE_LIMIT_GENERATE:-20/hour}
+  JOBHUNTER_AI_PROVIDER: ${AI_PROVIDER:-rule_based}
+  JOBHUNTER_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+services:
+  web:
+    build: {context: .., dockerfile: deploy/Dockerfile.web}
+    restart: unless-stopped
+    environment: {SITE_ADDRESS: "${SITE_ADDRESS}"}
+    ports: ["80:80", "443:443"]
+    volumes: [caddy_data:/data, caddy_config:/config]
+    depends_on: {backend: {condition: service_healthy}}
+
+  backend:
+    build: {context: .., dockerfile: deploy/Dockerfile.backend}
+    restart: unless-stopped
+    environment: *backend-env
+    volumes: ["uploads:/var/lib/jobhunter/storage"]     # private: mounted ONLY here, never served by Caddy
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
+
+  migrate:
+    build: {context: .., dockerfile: deploy/Dockerfile.backend}
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-env
+    depends_on: {postgres: {condition: service_healthy}}
+    restart: "no"
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jobhunter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: jobhunter
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobhunter -d jobhunter"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    # Rate-limit counters only: no persistence needed. Password required even on the private network.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      retries: 20
+    environment: {REDIS_PASSWORD: "${REDIS_PASSWORD}"}
+
+  mailpit:            # optional local SMTP sink with web UI; only for smoke tests (`--profile mail-test`)
+    image: axllent/mailpit
+    profiles: ["mail-test"]
+    restart: unless-stopped
+    ports: ["127.0.0.1:8025:8025"]
+
+  clamav:             # optional malware scanner (`--profile clamav`); then set CLAMAV_HOST=clamav in the env file
+    image: clamav/clamav:stable
+    profiles: ["clamav"]
+    restart: unless-stopped
+    volumes: ["clamav_db:/var/lib/clamav"]
+
+volumes:
+  pg_data: {}
+  uploads: {}
+  caddy_data: {}
+  caddy_config: {}
+  clamav_db: {}

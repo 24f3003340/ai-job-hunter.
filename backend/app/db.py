@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -16,7 +16,13 @@ def make_engine(url: str):
         kwargs = {"connect_args": {"check_same_thread": False}}
         if ":memory:" in url:
             kwargs["poolclass"] = StaticPool
-        return create_engine(url, **kwargs)
+        eng = create_engine(url, **kwargs)
+
+        @event.listens_for(eng, "connect")
+        def _fk_on(dbapi_conn, _):  # SQLite ignores ON DELETE CASCADE unless this is set
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+        return eng
     return create_engine(url, pool_pre_ping=True)
 
 

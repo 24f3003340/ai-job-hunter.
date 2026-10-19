@@ -6,12 +6,12 @@ from sqlalchemy.orm import Session
 
 from ..audit import audit
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import (Application, ApplicationAnswer, ApplicationApproval, ApplicationEvent, CoverLetter, Job,
                       ResumeVersion, User, utcnow)
-from ..schemas import AnswerIn, ApplicationCreate, StatusUpdate
+from ..schemas import AnswerIn, ApplicationCreate, SetResumeIn, StatusUpdate
 from ..services.applications import (MANUAL_TRANSITIONS, STATUSES, active_approval, blockers, package_hash,
-                                     record_event, revoke_approval)
+                                     record_event, resume_blockers, revoke_approval)
 
 router = APIRouter(tags=["applications"])
 
@@ -82,6 +82,21 @@ def get_application(app_id: UUID, user: User = Depends(current_user), db: Sessio
         {"from": e.previous_status, "to": e.new_status, "type": e.event_type, "at": e.created_at} for e in events]}
 
 
+@router.put("/applications/{app_id}/resume")
+def set_resume(app_id: UUID, body: SetResumeIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Attach a different resume version. Any previous approval is revoked."""
+    app = _owned(db, user, app_id)
+    if app.status not in ("discovered", "match_evaluated", "ready_for_review", "approved", "submission_failed"):
+        raise HTTPException(409, "Resume can no longer be changed")
+    rid = body.resume_version_id
+    _own_linked(db, ResumeVersion, rid, user, app.job_id, "Resume version")
+    revoke_approval(db, app, "resume changed")
+    app.resume_version_id = rid
+    audit(db, user.id, "application_resume_changed", "application", app.id, resume_id=str(rid))
+    db.commit()
+    return _view(db, app)
+
+
 @router.put("/applications/{app_id}/answers")
 def replace_answers(app_id: UUID, answers: list[AnswerIn], user: User = Depends(current_user),
                     db: Session = Depends(get_db)):
@@ -95,7 +110,7 @@ def replace_answers(app_id: UUID, answers: list[AnswerIn], user: User = Depends(
 
 
 @router.post("/applications/{app_id}/approve")
-def approve(app_id: UUID, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def approve(app_id: UUID, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     app = _owned(db, user, app_id)
     if app.status != "ready_for_review":
         raise HTTPException(409, f"Cannot approve an application in status '{app.status}'")
@@ -111,7 +126,7 @@ def approve(app_id: UUID, user: User = Depends(current_user), db: Session = Depe
 
 
 @router.post("/applications/{app_id}/submit")
-def submit(app_id: UUID, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def submit(app_id: UUID, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     app = _owned(db, user, app_id)
     if app.status in ("submitted", "submission_in_progress"):
         return _view(db, app)  # idempotent: never re-submit
@@ -125,6 +140,11 @@ def submit(app_id: UUID, user: User = Depends(current_user), db: Session = Depen
     job = db.get(Job, app.job_id)
     if job.status == "expired":
         raise HTTPException(409, "Job listing is expired")
+    rb = resume_blockers(db, app)
+    if rb:
+        revoke_approval(db, app, "resume no longer eligible")
+        db.commit()
+        raise HTTPException(409, {"detail": "Resume is not eligible for submission", "blockers": rb})
     # No authorized submission connectors exist yet. Never mark as submitted on our own:
     # hand the user the official link; they can record a manual submission via PATCH.
     return {**_view(db, app), "submission": "manual_required",

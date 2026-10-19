@@ -1,0 +1,183 @@
+name: ci
+on:
+  push:
+    branches: [main]     # feature branches are covered by the pull_request event (avoids running everything twice)
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}-v2
+  cancel-in-progress: true
+
+jobs:
+  backend-unit:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: backend}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
+      - run: pip install -e '.[dev,integration]'
+      - run: python -m pytest -q            # default tier: SQLite, no services, no network
+
+  backend-integration:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: backend}}
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: jobhunter, POSTGRES_PASSWORD: devpassword, POSTGRES_DB: jobhunter_test}
+        ports: ["5433:5432"]
+        options: --health-cmd "pg_isready -U jobhunter" --health-interval 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6380:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-retries 20
+    env:
+      JOBHUNTER_TEST_DATABASE_URL: postgresql+psycopg://jobhunter:devpassword@127.0.0.1:5433/jobhunter_test
+      JOBHUNTER_TEST_REDIS_URL: redis://127.0.0.1:6380/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
+      - run: pip install -e '.[dev,integration]'
+      - run: python -m pytest -q                 # whole unit suite on PostgreSQL (Alembic-built schema)
+      - run: python -m pytest -q -m integration  # PostgreSQL-specific, real SMTP protocol, Redis + multi-worker
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: frontend}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  e2e:
+    needs: [backend-unit, frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - name: Backend virtualenv (used by the E2E harness)
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/pip install -e 'backend[dev]'
+      - name: Frontend dependencies and browsers
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Playwright end-to-end (real FastAPI + SQLite + Vite)
+        working-directory: frontend
+        env:
+          E2E_BROWSERS: ${{ matrix.browser }}
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          retention-days: 7
+
+  staging-compose:
+    # Boots the REAL staging stack (Caddy + backend + migrate + PostgreSQL + Redis + TLS SMTP sink) and tests it end to end.
+    needs: [backend-unit, frontend]
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE: docker compose -f deploy/docker-compose.staging.yml -f deploy/docker-compose.ci.yml --env-file deploy/.env.staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip, cache-dependency-path: backend/pyproject.toml}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - name: Test-only environment (throwaway credentials, never reused)
+        run: |
+          mkdir -p .ci/mail .ci/uploads .ci/certs .ci/backups
+          chmod -R 777 .ci
+          cat > deploy/.env.staging <<'EOT'
+          SITE_ADDRESS=localhost
+          POSTGRES_PASSWORD=ci-postgres-password
+          REDIS_PASSWORD=ci-redis-password
+          EMAIL_FROM=no-reply@localhost
+          SMTP_HOST=smtp
+          SMTP_PORT=2525
+          SMTP_USER=mailer
+          SMTP_PASSWORD=sinkpw
+          SMTP_SECURITY=starttls
+          SMTP_CA_FILE=/certs/cert.pem
+          ALLOW_UNSCANNED_UPLOADS=true
+          AI_PROVIDER=rule_based
+          RATE_LIMIT_AUTH=100000/minute
+          RATE_LIMIT_DEFAULT=100000/minute
+          RATE_LIMIT_UPLOAD=100000/hour
+          RATE_LIMIT_GENERATE=100000/hour
+          EOT
+      - name: Validate and start the stack
+        run: |
+          $COMPOSE config --quiet
+          $COMPOSE up -d --build
+          for i in $(seq 1 120); do
+            curl -skf https://localhost/health | grep -q '"ok"' && break
+            sleep 3
+          done
+          $COMPOSE ps
+          curl -skf https://localhost/health
+      - name: Install test tooling
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/pip install -e 'backend[dev]'
+          cd frontend && npm ci && npx playwright install --with-deps chromium
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: HTTP smoke test of the deployed stack
+        run: STAGING_URL=https://localhost STAGING_INSECURE=1 STAGING_MAIL_DIR=$PWD/.ci/mail backend/.venv/bin/python scripts/staging_smoke.py
+      - name: Browser E2E against the deployed stack (real HTTPS, CSP header)
+        working-directory: frontend
+        env:
+          E2E_EXTERNAL: "1"
+          E2E_BASE_URL: https://localhost
+          E2E_MAIL_DIR: ${{ github.workspace }}/.ci/mail
+          E2E_BROWSERS: chromium
+        run: npx playwright test
+      - name: Backup and restore verification
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: jobhunter
+          PGPASSWORD: ci-postgres-password
+          PGDATABASE: jobhunter
+          STORAGE_DIR: ${{ github.workspace }}/.ci/uploads
+          BACKUP_DIR: ${{ github.workspace }}/.ci/backups
+          BACKUP_PASSPHRASE: ci-backup-passphrase
+          VERIFY_PYTHON: ${{ github.workspace }}/backend/.venv/bin/python
+        run: |
+          # The container (uid 10001) writes uploads with private modes; in this test setup the host runner reads the bind mount.
+          sudo chmod -R a+rX .ci/uploads
+          B=$(deploy/scripts/backup.sh)
+          BACKUP=$B deploy/scripts/verify_restore.sh
+      - name: Stack logs (on failure)
+        if: failure()
+        run: $COMPOSE logs --no-color --tail=120
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: staging-playwright
+          path: frontend/test-results
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        run: $COMPOSE down -v
