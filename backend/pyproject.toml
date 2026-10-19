@@ -12,7 +12,7 @@ dependencies = [
 include = ["app*"]   # migrations/ and tests/ are not part of the installable package
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pyyaml>=6"]
 integration = ["pytest>=8", "redis>=5", "aiosmtpd>=1.4", "cryptography>=42"]
 
 [tool.pytest.ini_options]

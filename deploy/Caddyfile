@@ -1,0 +1,63 @@
+# HTTPS front door: serves the SPA and proxies /api to the backend.
+# SITE_ADDRESS examples:  app.example.com   (public DNS name: Caddy obtains/renews a Let's Encrypt certificate)
+#                         localhost         (Caddy's internal CA; browsers will warn - for local/CI smoke tests only)
+{
+	# email you@example.com            # <- set for Let's Encrypt expiry notices (staging guide, step 6)
+}
+
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		-Server
+	}
+
+	# Access logs without query strings' secrets: e-mailed links look like /verify-email?token=... on THIS host.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			request>uri query {
+				replace token REDACTED
+			}
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+		}
+	}
+
+	# Readiness exposes internal state: reachable only inside the Docker network (compose healthchecks), not from the internet.
+	@ready path /health/ready
+	respond @ready 404
+
+	handle /api/* {
+		request_body {
+			max_size 6MB   # CV limit is 5 MB; leave room for multipart overhead
+		}
+		reverse_proxy backend:8000 {
+			# Overwrite (never append) so a client-supplied X-Forwarded-For cannot dodge per-IP rate limits.
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			health_uri /health
+			health_interval 15s
+		}
+	}
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		header /index.html Cache-Control "no-store"
+		try_files {path} /index.html
+		file_server
+	}
+}

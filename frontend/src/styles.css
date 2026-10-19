@@ -1,13 +1,13 @@
 :root {
   --bg: #f6f7f9; --surface: #ffffff; --text: #1b1f24; --muted: #5a6572; --border: #d3d9e0;
-  --primary: #1f5fbf; --primary-text: #ffffff; --danger: #b3261e; --danger-bg: #fdecea;
+  --primary: #1f5fbf; --primary-text: #ffffff; --danger: #b3261e; --danger-text: #ffffff; --danger-bg: #fdecea;
   --warn: #8a5a00; --warn-bg: #fff4d6; --ok: #1b6e3c; --ok-bg: #e3f5e9; --info-bg: #e8f0fb; --focus: #ffb703;
   --radius: 8px; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; line-height: 1.5;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #12161b; --surface: #1b2127; --text: #e8ecf0; --muted: #a3afbc; --border: #36404a;
-    --primary: #6aa3f0; --primary-text: #0b1420; --danger: #ff8a80; --danger-bg: #3a1c1a;
+    --primary: #6aa3f0; --primary-text: #0b1420; --danger: #ff8a80; --danger-text: #2b0907; --danger-bg: #3a1c1a;
     --warn: #f2c14e; --warn-bg: #3a2f10; --ok: #7fd49a; --ok-bg: #12301d; --info-bg: #1a2a40;
   }
 }
@@ -44,7 +44,7 @@ legend { font-weight: 700; padding: 0 .4rem; }
 .check label { font-weight: 400; margin: 0; }
 button, .btn { font: inherit; padding: .5rem 1rem; border-radius: 6px; border: 1px solid var(--primary); background: var(--primary); color: var(--primary-text); cursor: pointer; text-decoration: none; display: inline-block; }
 button.secondary, .btn.secondary { background: transparent; color: var(--primary); }
-button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-text); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 button.link { background: none; border: none; color: var(--primary); text-decoration: underline; padding: 0; }
 .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; } .row.end { justify-content: flex-end; }

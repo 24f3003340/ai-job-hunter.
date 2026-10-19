@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { PASSWORD, captureToken, shot, latestMailToken, register, spaNavigate, uniqueEmail } from './helpers'
 
 test('wrong password and unknown user get the same message; lockout is explained', async ({ page }) => {

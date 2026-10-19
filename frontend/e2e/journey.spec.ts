@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { E2E_DIR, captureToken, shot, latestMailToken, register, spaNavigate, uniqueEmail } from './helpers'

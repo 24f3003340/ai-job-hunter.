@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
 
+// E2E_EXTERNAL=1: test an ALREADY RUNNING deployment instead of starting dev servers.
+//   E2E_BASE_URL=https://host  E2E_MAIL_DIR=<dir the SMTP sink writes .eml files to>
+const EXTERNAL = process.env.E2E_EXTERNAL === '1'
 const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 8011)
 const FRONTEND_PORT = Number(process.env.E2E_FRONTEND_PORT ?? 5174)
 // Use a preinstalled Chromium if present (sandboxes can't download browsers); otherwise Playwright's own.
@@ -17,12 +20,12 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   reporter: [['list']],
-  use: { baseURL: `http://127.0.0.1:${FRONTEND_PORT}`, trace: 'retain-on-failure' },
+  use: { baseURL: process.env.E2E_BASE_URL ?? `http://127.0.0.1:${FRONTEND_PORT}`, trace: 'retain-on-failure', ignoreHTTPSErrors: EXTERNAL },
   projects: browsers.map((b) => b === 'chromium'
     ? { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { executablePath } } }
     : b === 'firefox' ? { name: 'firefox', use: { ...devices['Desktop Firefox'] } }
     : { name: 'webkit', use: { ...devices['Desktop Safari'] } }),
-  webServer: [
+  webServer: EXTERNAL ? undefined : [
     { command: './e2e/backend.sh', url: `http://127.0.0.1:${BACKEND_PORT}/health`, reuseExistingServer: false, timeout: 60_000, env: { E2E_BACKEND_PORT: String(BACKEND_PORT) } },
     { command: `npx vite --port ${FRONTEND_PORT} --strictPort --host 127.0.0.1`, url: `http://127.0.0.1:${FRONTEND_PORT}`, reuseExistingServer: false, timeout: 60_000,
       env: { VITE_DEV_PROXY_TARGET: `http://127.0.0.1:${BACKEND_PORT}` } },
