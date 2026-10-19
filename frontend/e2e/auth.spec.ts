@@ -28,8 +28,13 @@ test('password reset by e-mail: single use, old password stops working', async (
   const email = uniqueEmail('reset')
   await register(page, email)
   await page.getByRole('button', { name: 'Log out' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Log in' })).toBeVisible()
   await page.getByRole('link', { name: 'Forgot your password?' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Reset your password' })).toBeVisible()
+  // the field is native-validated (required, type=email): make sure the value is really there before submitting,
+  // otherwise the browser blocks the submit silently and nothing is sent
   await page.getByLabel('Email').fill(email)
+  await expect(page.getByLabel('Email')).toHaveValue(email)
   await page.getByRole('button', { name: 'Send reset email' }).click()
   await expect(page.getByText(/if that account exists/i)).toBeVisible()
   const token = latestMailToken(email, 'Reset your password')

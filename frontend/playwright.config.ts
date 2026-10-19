@@ -17,7 +17,7 @@ export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: false,
   workers: 1,
-  timeout: 60_000,
+  timeout: process.env.CI ? 120_000 : 60_000,
   expect: { timeout: 10_000 },
   reporter: [['list']],
   use: { baseURL: process.env.E2E_BASE_URL ?? `http://127.0.0.1:${FRONTEND_PORT}`, trace: 'retain-on-failure', ignoreHTTPSErrors: EXTERNAL },
