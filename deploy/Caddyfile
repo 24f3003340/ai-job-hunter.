@@ -24,11 +24,13 @@
 		output stdout
 		format filter {
 			wrap json
-			request>uri query {
-				replace token REDACTED
+			fields {
+				request>uri query {
+					replace token REDACTED
+				}
+				request>headers>Authorization delete
+				request>headers>Cookie delete
 			}
-			request>headers>Authorization delete
-			request>headers>Cookie delete
 		}
 	}
 
